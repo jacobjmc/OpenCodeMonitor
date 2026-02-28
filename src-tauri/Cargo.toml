@@ -1,6 +1,6 @@
 [package]
 name = "opencode-monitor"
-version = "0.1.0"
+version = "0.1.1"
 description = "A macOS monitor app for OpenCode agents"
 authors = ["Jacob"]
 edition = "2021"
