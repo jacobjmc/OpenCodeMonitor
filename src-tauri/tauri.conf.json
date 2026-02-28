@@ -53,7 +53,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "RWSrR129PnCsoT2HtWNshDyqL0WK2KrXhN9jo78M5eOQyuU3oZSBr6OJ",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEExQUM3MDNFQkQ1RDQ3QUIKUldTclIxMjlQbkNzb1QySHRXTnNoRHlxTDBXSzJLclhoTjlqbzc4TTVlT1F5dVUzb1pTQnI2T0oK",
       "endpoints": [
         "https://github.com/jacobjmc/OpenCodeMonitor/releases/latest/download/latest.json"
       ]
