@@ -150,6 +150,14 @@ export function reduceThreadLifecycle(
       };
     }
     case "removeThread": {
+      const hiddenForWorkspace =
+        state.hiddenThreadIdsByWorkspace[action.workspaceId] ?? {};
+      const nextHiddenForWorkspace = hiddenForWorkspace[action.threadId]
+        ? hiddenForWorkspace
+        : {
+            ...hiddenForWorkspace,
+            [action.threadId]: true as const,
+          };
       const list = state.threadsByWorkspace[action.workspaceId] ?? [];
       const filtered = list.filter((thread) => thread.id !== action.threadId);
       const nextActive =
@@ -164,6 +172,10 @@ export function reduceThreadLifecycle(
       const { [action.threadId]: ______, ...restParents } = state.threadParentById;
       return {
         ...state,
+        hiddenThreadIdsByWorkspace: {
+          ...state.hiddenThreadIdsByWorkspace,
+          [action.workspaceId]: nextHiddenForWorkspace,
+        },
         threadsByWorkspace: {
           ...state.threadsByWorkspace,
           [action.workspaceId]: filtered,

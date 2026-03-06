@@ -4,8 +4,8 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, Mutex};
-use tokio::time::timeout;
+use tokio::sync::Mutex;
+use tokio::time::{sleep, timeout};
 
 use crate::backend::app_server::{
     build_codex_command_with_bin, build_codex_path_env, check_codex_installation, WorkspaceSession,
@@ -265,8 +265,6 @@ pub(crate) async fn run_background_prompt_core<F>(
     prompt: String,
     model: Option<&str>,
     on_hide_thread: F,
-    timeout_error: &str,
-    turn_error_fallback: &str,
 ) -> Result<String, String>
 where
     F: Fn(&str, &str),
@@ -302,85 +300,184 @@ where
         );
     }
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
-    {
-        let mut callbacks = session.background_thread_callbacks.lock().await;
-        callbacks.insert(thread_id.clone(), tx.clone());
-    }
-
-    let prompt_path = format!("/session/{}/prompt_async", &thread_id);
+    let prompt_path = format!("/session/{}/message", &thread_id);
     let mut prompt_body = json!({
         "parts": [{ "type": "text", "text": prompt }],
     });
-    if let Some(model_id) = model {
-        prompt_body["model"] = json!(model_id);
+    if let Some(model_override) = resolve_background_prompt_model(session.as_ref(), model).await {
+        prompt_body["model"] = model_override;
     }
     let _prompt_guard = session.prompt_lock.lock().await;
-    if let Err(error) = session.rest_post(&prompt_path, prompt_body).await {
-        {
-            let mut callbacks = session.background_thread_callbacks.lock().await;
-            callbacks.remove(&thread_id);
+    let async_path = format!("/session/{}/prompt_async", &thread_id);
+    session.rest_post(&async_path, prompt_body).await?;
+    poll_background_prompt_result(session.as_ref(), &prompt_path, &thread_id).await
+}
+
+fn extract_text_from_message_response(response: &Value) -> Result<String, String> {
+    let Some(parts) = response.get("parts").and_then(|value| value.as_array()) else {
+        return Err("Failed to parse helper response parts".to_string());
+    };
+
+    let mut text = String::new();
+    for part in parts {
+        let part_type = part.get("type").and_then(|value| value.as_str()).unwrap_or("");
+        if part_type != "text" {
+            continue;
         }
-        return Err(error);
+        if let Some(value) = part.get("text").and_then(|value| value.as_str()) {
+            text.push_str(value);
+        }
     }
 
-    let mut response_text = String::new();
-    let collect_result = timeout(Duration::from_secs(60), async {
+    Ok(text.trim().to_string())
+}
+
+async fn resolve_background_prompt_model(
+    session: &WorkspaceSession,
+    requested_model: Option<&str>,
+) -> Option<Value> {
+    let requested = requested_model?.trim();
+    if requested.is_empty() {
+        return None;
+    }
+
+    if let Some((provider_id, model_id)) = requested.split_once('/') {
+        let provider_id = provider_id.trim();
+        let model_id = model_id.trim();
+        if !provider_id.is_empty() && !model_id.is_empty() {
+            return Some(json!({
+                "providerID": provider_id,
+                "modelID": model_id
+            }));
+        }
+    }
+
+    let providers = if let Some(cached) = session.models_cache.lock().await.clone() {
+        cached
+    } else {
+        let fresh = session.rest_get("/config/providers").await.ok()?;
+        *session.models_cache.lock().await = Some(fresh.clone());
+        fresh
+    };
+
+    let providers = providers
+        .get("providers")
+        .and_then(|value| value.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut matches = Vec::new();
+    for provider in providers {
+        let provider_id = provider
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .unwrap_or_default();
+        if provider_id.is_empty() {
+            continue;
+        }
+
+        let Some(models) = provider.get("models").and_then(|value| value.as_object()) else {
+            continue;
+        };
+
+        let found = models.contains_key(requested)
+            || models.values().any(|model| {
+                model
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    == requested
+            });
+        if found {
+            matches.push(provider_id.to_string());
+        }
+    }
+
+    if matches.len() == 1 {
+        Some(json!({
+            "providerID": matches[0],
+            "modelID": requested
+        }))
+    } else {
+        None
+    }
+}
+
+async fn poll_background_prompt_result(
+    session: &WorkspaceSession,
+    messages_path: &str,
+    thread_id: &str,
+) -> Result<String, String> {
+    timeout(Duration::from_secs(90), async {
+        let mut idle_polls = 0usize;
+
         loop {
-            let Some(event) = rx.recv().await else {
-                return Err("Background response stream closed before completion".to_string());
-            };
-            let method = event.get("method").and_then(|m| m.as_str()).unwrap_or("");
-            match method {
-                "item/agentMessage/delta" => {
-                    if let Some(params) = event.get("params") {
-                        if let Some(delta) = params.get("delta").and_then(|d| d.as_str()) {
-                            response_text.push_str(delta);
-                        }
-                    }
-                }
-                "turn/completed" => break,
-                "turn/error" => {
-                    let error_msg = event
-                        .get("params")
-                        .and_then(|p| p.get("error"))
-                        .and_then(|e| e.as_str())
-                        .unwrap_or(turn_error_fallback);
-                    return Err(error_msg.to_string());
-                }
-                "error" => {
-                    let error_msg = event
-                        .get("params")
-                        .and_then(|p| p.get("error"))
-                        .and_then(|e| e.get("message").or_else(|| e.get("error")))
-                        .and_then(|e| e.as_str())
-                        .unwrap_or(turn_error_fallback);
-                    return Err(error_msg.to_string());
-                }
-                _ => {}
+            let statuses = session.rest_get("/session/status").await?;
+            let status_type = statuses
+                .get(thread_id)
+                .and_then(|status| status.get("type"))
+                .and_then(|value| value.as_str());
+
+            let messages = session.rest_get(messages_path).await?;
+            if let Some(result) = extract_background_prompt_result_from_messages(&messages) {
+                return result;
             }
+
+            match status_type {
+                Some("busy") | Some("retry") => idle_polls = 0,
+                _ => idle_polls += 1,
+            }
+
+            if idle_polls >= 4 {
+                return Err("No response was generated".to_string());
+            }
+
+            sleep(Duration::from_millis(250)).await;
         }
-        Ok(())
     })
-    .await;
+    .await
+    .map_err(|_| "Timeout waiting for helper response".to_string())?
+}
 
-    {
-        let mut callbacks = session.background_thread_callbacks.lock().await;
-        callbacks.remove(&thread_id);
+fn extract_background_prompt_result_from_messages(messages: &Value) -> Option<Result<String, String>> {
+    let entries = messages.as_array()?;
+
+    for entry in entries.iter().rev() {
+        let info = entry.get("info")?;
+        if info.get("role").and_then(|value| value.as_str()) != Some("assistant") {
+            continue;
+        }
+
+        if let Some(error) = info.get("error") {
+            let message = error
+                .get("data")
+                .and_then(|data| data.get("message"))
+                .or_else(|| error.get("message"))
+                .or_else(|| error.get("error"))
+                .or_else(|| error.get("name"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("Unknown error during helper prompt");
+            return Some(Err(message.to_string()));
+        }
+
+        let is_completed = info
+            .get("time")
+            .and_then(|time| time.get("completed"))
+            .is_some();
+        if !is_completed {
+            return None;
+        }
+
+        let text = extract_text_from_message_response(entry).unwrap_or_default();
+        if text.is_empty() {
+            return Some(Err("No response was generated".to_string()));
+        }
+        return Some(Ok(text));
     }
 
-    match collect_result {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => return Err(error),
-        Err(_) => return Err(timeout_error.to_string()),
-    }
-
-    let trimmed = response_text.trim().to_string();
-    if trimmed.is_empty() {
-        return Err("No response was generated".to_string());
-    }
-
-    Ok(trimmed)
+    None
 }
 
 async fn remember_hidden_session_id(
@@ -433,8 +530,6 @@ where
         prompt,
         model,
         on_hide_thread,
-        "Timeout waiting for commit message generation",
-        "Unknown error during commit message generation",
     )
     .await
 }
@@ -464,8 +559,6 @@ where
         metadata_prompt,
         None,
         on_hide_thread,
-        "Timeout waiting for metadata generation",
-        "Unknown error during metadata generation",
     )
     .await?;
 
@@ -474,7 +567,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{build_commit_message_prompt_for_diff, parse_run_metadata_value};
+    use super::{
+        build_commit_message_prompt_for_diff, extract_text_from_message_response,
+        parse_run_metadata_value,
+    };
+    use serde_json::json;
 
     #[test]
     fn build_commit_message_prompt_for_diff_requires_changes() {
@@ -502,5 +599,19 @@ mod tests {
             result.expect_err("should fail"),
             "Missing title in metadata"
         );
+    }
+
+    #[test]
+    fn extract_text_from_message_response_concatenates_text_parts() {
+        let response = json!({
+            "info": { "id": "msg_1" },
+            "parts": [
+                { "type": "reasoning", "text": "thinking" },
+                { "type": "text", "text": "fix: " },
+                { "type": "text", "text": "update parser" }
+            ]
+        });
+        let parsed = extract_text_from_message_response(&response).expect("helper text");
+        assert_eq!(parsed, "fix: update parser");
     }
 }

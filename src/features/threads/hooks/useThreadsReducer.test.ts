@@ -713,6 +713,38 @@ describe("threadReducer", () => {
     expect(next.turnDiffByThread["thread-1"]).toBeUndefined();
   });
 
+  it("keeps removed threads hidden on future syncs", () => {
+    const base: ThreadState = {
+      ...initialState,
+      threadsByWorkspace: {
+        "ws-1": [{ id: "thread-1", name: "Agent 1", updatedAt: 1 }],
+      },
+      activeThreadIdByWorkspace: { "ws-1": "thread-1" },
+    };
+
+    const removed = threadReducer(base, {
+      type: "removeThread",
+      workspaceId: "ws-1",
+      threadId: "thread-1",
+    });
+
+    expect(removed.hiddenThreadIdsByWorkspace["ws-1"]?.["thread-1"]).toBe(true);
+
+    const synced = threadReducer(removed, {
+      type: "setThreads",
+      workspaceId: "ws-1",
+      sortKey: "updated_at",
+      threads: [
+        { id: "thread-1", name: "Archived thread", updatedAt: 10 },
+        { id: "thread-2", name: "Visible thread", updatedAt: 11 },
+      ],
+    });
+
+    expect(synced.threadsByWorkspace["ws-1"]?.map((thread) => thread.id)).toEqual([
+      "thread-2",
+    ]);
+  });
+
   it("hides background threads and keeps them hidden on future syncs", () => {
     const withThread = threadReducer(initialState, {
       type: "ensureThread",

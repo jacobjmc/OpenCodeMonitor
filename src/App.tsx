@@ -1308,6 +1308,7 @@ function MainApp() {
     activeWorkspace,
     activeWorkspaceId,
     activeWorkspaceIdRef,
+    commitMessageModelId: selectedModelId,
     gitStatus,
     refreshGitStatus,
     refreshGitLog,

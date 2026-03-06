@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-const GITHUB_URL = "https://github.com/jacob/OpenCodeMonitor";
+const GITHUB_URL = "https://github.com/jacobjmc/OpenCodeMonitor";
 const TWITTER_URL = "https://x.com/jacob";
 
 export function AboutView() {

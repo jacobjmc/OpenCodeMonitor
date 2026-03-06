@@ -394,6 +394,7 @@ pub(crate) fn translate_sse_event(
         "session.updated" => translate_session_created_or_updated(properties, state, true),
         "session.status" => translate_session_status(properties, state),
         "session.idle" => translate_session_idle(properties, state),
+        "session.error" => translate_session_error(properties, state),
         "permission.asked" => translate_sse_permission(properties, state),
         "question.asked" => translate_question_asked(properties, state),
         "question.replied" => translate_question_completed(properties),
@@ -1447,13 +1448,16 @@ fn translate_session_status(properties: &Value, state: &mut SessionTranslationSt
             vec![build_turn_started(&thread_id, &synthetic_turn_id)]
         }
         "idle" => {
-            if turn_id.is_empty() {
+            if thread_id.is_empty() {
                 return vec![];
             }
             let mut events = Vec::new();
             if let Some(msg_completed) = build_agent_message_completed(state, &thread_id) {
                 events.push(msg_completed);
             }
+            // Background helper prompts can complete without ever emitting an
+            // "active" status, so still emit turn/completed with an empty turn
+            // id to unblock shared background collectors.
             events.push(build_turn_completed(&thread_id, &turn_id));
             state.finish_turn(&thread_id);
             events
@@ -1516,6 +1520,52 @@ fn translate_session_idle(properties: &Value, state: &mut SessionTranslationStat
     events.push(build_turn_completed(&thread_id, &turn_id));
     state.finish_turn(&thread_id);
     events
+}
+
+fn translate_session_error(properties: &Value, state: &mut SessionTranslationState) -> Vec<Value> {
+    let session_id = properties
+        .get("sessionID")
+        .or_else(|| properties.get("session_id"))
+        .or_else(|| properties.get("id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if !session_id.is_empty() {
+        state.session_id = session_id.to_string();
+    }
+
+    let thread_id = state.session_id.clone();
+    if thread_id.is_empty() {
+        return vec![];
+    }
+
+    let turn_id = state
+        .get_turn_state(&thread_id)
+        .map(|ts| ts.turn_id.clone())
+        .unwrap_or_default();
+
+    let error = properties.get("error").unwrap_or(&Value::Null);
+    let error_msg = error
+        .get("data")
+        .and_then(|data| data.get("message"))
+        .or_else(|| error.get("message"))
+        .or_else(|| error.get("error"))
+        .or_else(|| error.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown error");
+
+    state.finish_turn(&thread_id);
+    vec![json!({
+        "method": "error",
+        "params": {
+            "threadId": thread_id,
+            "turnId": turn_id,
+            "willRetry": false,
+            "error": {
+                "message": error_msg
+            }
+        }
+    })]
 }
 
 // ---------------------------------------------------------------------------
@@ -2439,6 +2489,48 @@ mod tests {
         });
         let events = translate_sse_event(&event, &mut state);
         assert!(events.iter().any(|e| e["method"] == "turn/completed"));
+    }
+
+    #[test]
+    fn session_status_idle_without_active_turn_still_completes() {
+        let mut state = SessionTranslationState::new(String::new());
+        let event = json!({
+            "type": "session.status",
+            "properties": {
+                "sessionID": "ses_background_1",
+                "status": { "type": "idle" }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "turn/completed");
+        assert_eq!(events[0]["params"]["threadId"], "ses_background_1");
+        assert_eq!(events[0]["params"]["turn"]["id"], "");
+    }
+
+    #[test]
+    fn session_error_produces_error_event_without_active_turn() {
+        let mut state = SessionTranslationState::new(String::new());
+        let event = json!({
+            "type": "session.error",
+            "properties": {
+                "sessionID": "ses_background_2",
+                "error": {
+                    "name": "BadRequestError",
+                    "data": {
+                        "message": "model not available"
+                    }
+                }
+            }
+        });
+
+        let events = translate_sse_event(&event, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["method"], "error");
+        assert_eq!(events[0]["params"]["threadId"], "ses_background_2");
+        assert_eq!(events[0]["params"]["turnId"], "");
+        assert_eq!(events[0]["params"]["error"]["message"], "model not available");
     }
 
     #[test]
