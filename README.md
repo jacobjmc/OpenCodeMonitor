@@ -85,10 +85,11 @@ npm run tauri:build
 OpenCode Monitor is built on top of [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by [Thomas Ricouard](https://github.com/Dimillian).
 
 **Support the original author:**
+
 - [Sponsor Thomas on GitHub](https://github.com/sponsors/Dimillian)
-- [Ice Cubes for Mastodon](https://apps.apple.com/app/ice-cubes-for-mastodon/id6444915884)
 
 **Support this fork:**
+
 - [Buy me a coffee](https://buymeacoffee.com/jacobjmc)
 
 ## License

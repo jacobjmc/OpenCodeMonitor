@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
 use futures_util::StreamExt;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest_eventsource::{Event, EventSource};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, watch, Mutex, OnceCell};
@@ -55,6 +57,66 @@ struct ServerProcess {
 
 fn rest_base_url() -> String {
     format!("http://127.0.0.1:{REST_PORT}")
+}
+
+fn rest_base_url_for_port(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
+fn server_auth_header_value() -> Option<HeaderValue> {
+    let password = env::var("OPENCODE_SERVER_PASSWORD").ok()?;
+    let password = password.trim();
+    if password.is_empty() {
+        return None;
+    }
+
+    let username = env::var("OPENCODE_SERVER_USERNAME")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "opencode".to_string());
+
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+    HeaderValue::from_str(&format!("Basic {encoded}")).ok()
+}
+
+fn server_default_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Some(auth) = server_auth_header_value() {
+        headers.insert(AUTHORIZATION, auth);
+    }
+    headers
+}
+
+fn server_http_client(timeout: Option<Duration>) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().default_headers(server_default_headers());
+    if let Some(timeout) = timeout {
+        builder = builder.timeout(timeout);
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+fn preferred_managed_rest_port() -> Result<u16, String> {
+    if std::net::TcpListener::bind(("127.0.0.1", REST_PORT)).is_ok() {
+        return Ok(REST_PORT);
+    }
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
+    listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .map_err(|e| e.to_string())
+}
+
+async fn tracked_server_base_url() -> Option<String> {
+    if let Some(server_mutex) = SERVER_PROCESS.get() {
+        return Some(server_mutex.lock().await.base_url.clone());
+    }
+
+    read_pid_file()
+        .await
+        .map(|pid_data| rest_base_url_for_port(pid_data.port))
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +245,7 @@ async fn try_reclaim_orphaned_server() -> bool {
     }
 
     // Process is running - check if it's actually our server on the expected port
-    let base_url = rest_base_url();
+    let base_url = rest_base_url_for_port(pid_data.port);
     if health_check(&base_url).await.is_err() {
         // Process exists but isn't responding as our server - stale PID file
         delete_pid_file().await;
@@ -331,7 +393,9 @@ pub(crate) async fn opencode_restart_required_status() -> Value {
         });
     };
 
-    let base_url = rest_base_url();
+    let base_url = tracked_server_base_url()
+        .await
+        .unwrap_or_else(rest_base_url);
     let server_healthy = health_check(&base_url).await.is_ok();
     let managed = is_server_owned().await;
 
@@ -477,19 +541,23 @@ async fn start_managed_server_process(
     codex_bin: Option<String>,
     codex_args: Option<&str>,
 ) -> Result<ServerProcess, String> {
-    let base_url = rest_base_url();
+    let port = preferred_managed_rest_port()?;
+    let base_url = rest_base_url_for_port(port);
     let mut command = build_codex_command_with_bin(
         codex_bin,
         codex_args,
         vec![
             "serve".to_string(),
+            "--hostname".to_string(),
+            "127.0.0.1".to_string(),
             "--port".to_string(),
-            REST_PORT.to_string(),
+            port.to_string(),
         ],
     )?;
     command.stdin(std::process::Stdio::null());
     command.stdout(std::process::Stdio::null());
     command.stderr(std::process::Stdio::null());
+    command.env("OPENCODE_CLIENT", "opencode-monitor");
 
     let child = command.spawn().map_err(|e| {
         if e.kind() == ErrorKind::NotFound {
@@ -502,7 +570,7 @@ async fn start_managed_server_process(
 
     // Write PID file for ownership tracking
     if let Some(pid) = child.id() {
-        if let Err(e) = write_pid_file(pid, REST_PORT).await {
+        if let Err(e) = write_pid_file(pid, port).await {
             eprintln!("Warning: failed to write PID file: {e}");
         }
     }
@@ -528,9 +596,20 @@ async fn ensure_server_running(
 ) -> Result<String, String> {
     let base_url = rest_base_url();
 
-    // Fast path: if already initialized, just return the URL.
-    if SERVER_PROCESS.get().is_some() {
-        return Ok(base_url);
+    // Fast path: if we already manage a server, verify it's still healthy and
+    // replace it in-place if it exited after initialization.
+    if let Some(server_mutex) = SERVER_PROCESS.get() {
+        let mut guard = server_mutex.lock().await;
+        if health_check(&guard.base_url).await.is_ok() {
+            return Ok(guard.base_url.clone());
+        }
+
+        let _ = kill_child_process_tree(&mut guard.child).await;
+        delete_pid_file().await;
+        let replacement = start_managed_server_process(codex_bin, codex_args).await?;
+        let replacement_base_url = replacement.base_url.clone();
+        *guard = replacement;
+        return Ok(replacement_base_url);
     }
 
     // Check if we have an orphaned server we can reclaim (via PID file).
@@ -558,10 +637,7 @@ async fn ensure_server_running(
 }
 
 async fn health_check(base_url: &str) -> Result<Value, String> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = server_http_client(Some(Duration::from_secs(3)))?;
     let resp = client
         .get(format!("{base_url}/global/health"))
         .send()
@@ -580,10 +656,7 @@ pub(crate) async fn global_rest_get(
     directory: Option<&str>,
 ) -> Result<Value, String> {
     let base_url = ensure_server_running(codex_bin, codex_args).await?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = server_http_client(Some(Duration::from_secs(300)))?;
     let mut url = format!("{base_url}{path}");
     if let Some(directory) = directory.filter(|value| !value.trim().is_empty()) {
         let separator = if path.contains('?') { "&" } else { "?" };
@@ -608,7 +681,9 @@ async fn is_server_owned() -> bool {
     }
     // Check if we have a valid PID file for the running server
     if let Some(pid_data) = read_pid_file().await {
-        if is_process_running(pid_data.pid) && pid_data.port == REST_PORT {
+        if is_process_running(pid_data.pid)
+            && health_check(&rest_base_url_for_port(pid_data.port)).await.is_ok()
+        {
             return true;
         }
     }
@@ -616,7 +691,7 @@ async fn is_server_owned() -> bool {
 }
 
 pub(crate) async fn opencode_server_status() -> Value {
-    let base_url = rest_base_url();
+    let base_url = tracked_server_base_url().await.unwrap_or_else(rest_base_url);
     let managed = is_server_owned().await;
     match health_check(&base_url).await {
         Ok(health) => json!({
@@ -660,7 +735,7 @@ pub(crate) async fn restart_opencode_server(
     // Case 2: We have a PID file (reclaimed server) - kill by PID and start fresh
     // Verify port matches to avoid killing an unrelated process if the PID was reused.
     if let Some(pid_data) = read_pid_file().await {
-        if is_process_running(pid_data.pid) && pid_data.port == REST_PORT {
+        if is_process_running(pid_data.pid) {
             terminate_process(pid_data.pid, false);
             tokio::time::sleep(Duration::from_millis(500)).await;
             if is_process_running(pid_data.pid) {
@@ -1135,7 +1210,40 @@ fn spawn_sse_reader<E: EventSink>(
                 break;
             }
 
-            let mut es = EventSource::get(&url);
+            let sse_client = match server_http_client(None) {
+                Ok(client) => client,
+                Err(error) => {
+                    event_sink.emit_app_server_event(AppServerEvent {
+                        workspace_id: workspace_id.clone(),
+                        message: json!({
+                            "method": "codex/parseError",
+                            "params": { "error": error, "raw": "failed to create SSE client" },
+                        }),
+                    });
+                    sleep(reconnect_delay).await;
+                    reconnect_delay = (reconnect_delay * 2).min(max_reconnect_delay);
+                    continue;
+                }
+            };
+            let request = sse_client.get(&url);
+            let mut es = match EventSource::new(request) {
+                Ok(es) => es,
+                Err(error) => {
+                    event_sink.emit_app_server_event(AppServerEvent {
+                        workspace_id: workspace_id.clone(),
+                        message: json!({
+                            "method": "codex/parseError",
+                            "params": {
+                                "error": error.to_string(),
+                                "raw": "failed to initialize SSE event source",
+                            },
+                        }),
+                    });
+                    sleep(reconnect_delay).await;
+                    reconnect_delay = (reconnect_delay * 2).min(max_reconnect_delay);
+                    continue;
+                }
+            };
 
             loop {
                 tokio::select! {
@@ -1250,10 +1358,7 @@ pub(crate) async fn spawn_workspace_session<E: EventSink>(
     // Ensure the shared `opencode serve` process is running.
     let base_url = ensure_server_running(codex_bin, codex_args.as_deref()).await?;
 
-    let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let http_client = server_http_client(Some(Duration::from_secs(300)))?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 

@@ -10,8 +10,12 @@ All OpenCode-to-CodexMonitor protocol translation remains in Rust so the fronten
 ## Current Backend Shape
 
 - One shared `opencode serve` process
+- Managed server binds explicitly to `127.0.0.1`
+- Managed server prefers the monitor port and falls back to a free localhost port on conflict
 - Workspace scoping via `?directory=<workspace_path>` on REST requests
 - One SSE subscription on `/global/event`
+- REST and SSE requests honor `OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME` when present
+- Managed server health is re-checked before reuse and restarted in place if the child died
 - Rust translation layer maps OpenCode SSE events into CodexMonitor frontend event shapes
 - Frontend remains transport-agnostic
 
