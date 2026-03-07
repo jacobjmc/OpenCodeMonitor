@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="public/app-icon.png" alt="OpenCode Monitor icon" width="128" height="128">
+</p>
+
 # OpenCode Monitor
 
 OpenCode Monitor is a desktop app for monitoring and interacting with [OpenCode](https://github.com/anomalyco/opencode) agents across multiple workspaces.
@@ -5,6 +9,8 @@ OpenCode Monitor is a desktop app for monitoring and interacting with [OpenCode]
 It is forked from [CodexMonitor](https://github.com/Dimillian/CodexMonitor) by Dimillian, adapted to use OpenCode's REST API + SSE backend while preserving CodexMonitor-shaped frontend event contracts.
 
 OpenCode Monitor is an independent community project and is not affiliated with or endorsed by the OpenCode team.
+
+![OpenCode Monitor demo](OpenCodeMonitorDemo.png)
 
 ## Status
 
