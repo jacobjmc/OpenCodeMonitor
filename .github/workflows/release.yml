@@ -688,8 +688,10 @@ jobs:
           git commit -m "chore: bump version to ${NEXT_VERSION}"
           git push origin "chore/bump-version-${NEXT_VERSION}"
 
-          gh pr create \
+          if ! gh pr create \
             --title "chore: bump version to ${NEXT_VERSION}" \
             --body "Post-release version bump to ${NEXT_VERSION}." \
             --base main \
-            --head "chore/bump-version-${NEXT_VERSION}"
+            --head "chore/bump-version-${NEXT_VERSION}"; then
+            echo "::warning::GitHub Actions could not create the post-release PR. The branch chore/bump-version-${NEXT_VERSION} was pushed successfully; open the PR manually."
+          fi
