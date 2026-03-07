@@ -1,7 +1,7 @@
 {
   "name": "opencode-monitor",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Desktop app for monitoring and interacting with OpenCode agents across multiple workspaces",
   "license": "MIT",
   "author": "Jacob",
