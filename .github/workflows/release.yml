@@ -688,10 +688,21 @@ jobs:
           git commit -m "chore: bump version to ${NEXT_VERSION}"
           git push origin "chore/bump-version-${NEXT_VERSION}"
 
+          PR_CREATE_LOG=$(mktemp)
           if ! gh pr create \
             --title "chore: bump version to ${NEXT_VERSION}" \
             --body "Post-release version bump to ${NEXT_VERSION}." \
             --base main \
-            --head "chore/bump-version-${NEXT_VERSION}"; then
-            echo "::warning::GitHub Actions could not create the post-release PR. The branch chore/bump-version-${NEXT_VERSION} was pushed successfully; open the PR manually."
+            --head "chore/bump-version-${NEXT_VERSION}" >"$PR_CREATE_LOG" 2>&1; then
+            if grep -q "GitHub Actions is not permitted to create or approve pull requests" "$PR_CREATE_LOG"; then
+              echo "::warning::GitHub Actions could not create the post-release PR due to repository policy. The branch chore/bump-version-${NEXT_VERSION} was pushed successfully; open the PR manually."
+              cat "$PR_CREATE_LOG"
+            else
+              cat "$PR_CREATE_LOG"
+              rm -f "$PR_CREATE_LOG"
+              exit 1
+            fi
+          else
+            cat "$PR_CREATE_LOG"
           fi
+          rm -f "$PR_CREATE_LOG"
