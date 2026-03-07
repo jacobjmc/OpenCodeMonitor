@@ -7,6 +7,28 @@ on:
     branches: ["main"]
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      tauri_build: ${{ steps.filter.outputs.tauri_build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            tauri_build:
+              - 'src/**'
+              - 'src-tauri/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'index.html'
+              - 'vite.config.*'
+              - 'tsconfig*.json'
+              - 'scripts/**'
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -102,10 +124,12 @@ jobs:
     name: Tauri build (${{ matrix.platform.name }})
     runs-on: ${{ matrix.platform.os }}
     needs:
+      - changes
       - lint
       - typecheck
       - test-js
       - test-tauri
+    if: github.event_name != 'pull_request' || needs.changes.outputs.tauri_build == 'true'
     strategy:
       fail-fast: false
       matrix:
