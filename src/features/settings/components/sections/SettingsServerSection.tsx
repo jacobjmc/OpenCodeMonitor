@@ -262,6 +262,9 @@ export function SettingsServerSection({
                   ? "Use the Tailscale host from your desktop OpenCode Monitor app (Server section), for example `macbook.your-tailnet.ts.net:4732`."
                   : "This host/token is used by mobile clients and desktop remote-mode testing."}
               </div>
+              <div className="settings-help">
+                Remote backend tokens are stored in your system keychain when available.
+              </div>
             </div>
 
             {isMobileSimplified && (
@@ -467,6 +470,9 @@ export function SettingsServerSection({
                   />
                   <div className="settings-help">
                     Use the same token configured on your desktop Orbit daemon setup.
+                  </div>
+                  <div className="settings-help">
+                    Remote backend tokens are stored in your system keychain when available.
                   </div>
                 </div>
                 <div className="settings-field">

@@ -2,6 +2,17 @@
   "name": "opencode-monitor",
   "private": true,
   "version": "0.1.1",
+  "description": "Desktop app for monitoring and interacting with OpenCode agents across multiple workspaces",
+  "license": "MIT",
+  "author": "Jacob",
+  "homepage": "https://github.com/jacobjmc/OpenCodeMonitor",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jacobjmc/OpenCodeMonitor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jacobjmc/OpenCodeMonitor/issues"
+  },
   "type": "module",
   "scripts": {
     "sync:material-icons": "node scripts/sync-material-icons.mjs",

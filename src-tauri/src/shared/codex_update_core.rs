@@ -167,11 +167,41 @@ pub(crate) async fn codex_update_core(
         .ok()
         .flatten();
 
-    let (method, package, upgrade_ok, output, upgraded) = if detect_brew_cask("codex").await? {
-        let (ok, output) = run_brew_upgrade(&["--cask", "codex"]).await?;
+    let (method, package, upgrade_ok, output, upgraded) = if detect_brew_formula("opencode").await?
+    {
+        let (ok, output) = run_brew_upgrade(&["opencode"]).await?;
+        let upgraded = brew_output_indicates_upgrade(&output);
+        (
+            "brew_formula".to_string(),
+            Some("opencode".to_string()),
+            ok,
+            output,
+            upgraded,
+        )
+    } else if detect_brew_cask("opencode").await? {
+        let (ok, output) = run_brew_upgrade(&["--cask", "opencode"]).await?;
         let upgraded = brew_output_indicates_upgrade(&output);
         (
             "brew_cask".to_string(),
+            Some("opencode".to_string()),
+            ok,
+            output,
+            upgraded,
+        )
+    } else if npm_has_package("opencode-ai").await? {
+        let (ok, output) = run_npm_install_latest("opencode-ai").await?;
+        (
+            "npm".to_string(),
+            Some("opencode-ai".to_string()),
+            ok,
+            output,
+            ok,
+        )
+    } else if detect_brew_cask("codex").await? {
+        let (ok, output) = run_brew_upgrade(&["--cask", "codex"]).await?;
+        let upgraded = brew_output_indicates_upgrade(&output);
+        (
+            "brew_cask_legacy".to_string(),
             Some("codex".to_string()),
             ok,
             output,
@@ -181,7 +211,7 @@ pub(crate) async fn codex_update_core(
         let (ok, output) = run_brew_upgrade(&["codex"]).await?;
         let upgraded = brew_output_indicates_upgrade(&output);
         (
-            "brew_formula".to_string(),
+            "brew_formula_legacy".to_string(),
             Some("codex".to_string()),
             ok,
             output,
@@ -190,7 +220,7 @@ pub(crate) async fn codex_update_core(
     } else if npm_has_package("@openai/codex").await? {
         let (ok, output) = run_npm_install_latest("@openai/codex").await?;
         (
-            "npm".to_string(),
+            "npm_legacy".to_string(),
             Some("@openai/codex".to_string()),
             ok,
             output,
@@ -222,11 +252,11 @@ pub(crate) async fn codex_update_core(
     };
 
     let details = if method == "unknown" {
-        Some("Unable to detect Codex installation method (brew/npm).".to_string())
+        Some("Unable to detect OpenCode installation method (brew/npm).".to_string())
     } else if upgrade_ok {
         None
     } else {
-        Some("Codex update failed.".to_string())
+        Some("OpenCode update failed.".to_string())
     };
 
     let result = CodexUpdateResult {

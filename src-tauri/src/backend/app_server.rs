@@ -131,14 +131,31 @@ struct PidFileData {
     started_at: String,
 }
 
-/// Returns the path to the PID file (~/.opencode-monitor/server.pid).
+/// Returns the path to the PID file for the managed local OpenCode server.
 fn pid_file_path() -> Option<PathBuf> {
-    let home = env::var("HOME").ok()?;
-    Some(
-        PathBuf::from(home)
-            .join(".opencode-monitor")
-            .join("server.pid"),
-    )
+    #[cfg(target_os = "windows")]
+    {
+        let base = env::var("LOCALAPPDATA")
+            .or_else(|_| env::var("APPDATA"))
+            .or_else(|_| env::var("USERPROFILE"))
+            .or_else(|_| env::var("HOME"))
+            .ok()?;
+        return Some(
+            PathBuf::from(base)
+                .join("OpenCodeMonitor")
+                .join("server.pid"),
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = env::var("HOME").ok()?;
+        Some(
+            PathBuf::from(home)
+                .join(".opencode-monitor")
+                .join("server.pid"),
+        )
+    }
 }
 
 /// Write PID file after starting the server.
@@ -346,9 +363,7 @@ async fn latest_change_under_dir(root: &Path) -> Option<TrackedConfigChange> {
     latest
 }
 
-async fn latest_change_in_tracked_config_paths(
-    config_root: &Path,
-) -> Option<TrackedConfigChange> {
+async fn latest_change_in_tracked_config_paths(config_root: &Path) -> Option<TrackedConfigChange> {
     let tracked_paths = [
         config_root.join("opencode.jsonc"),
         config_root.join("command"),
@@ -682,7 +697,9 @@ async fn is_server_owned() -> bool {
     // Check if we have a valid PID file for the running server
     if let Some(pid_data) = read_pid_file().await {
         if is_process_running(pid_data.pid)
-            && health_check(&rest_base_url_for_port(pid_data.port)).await.is_ok()
+            && health_check(&rest_base_url_for_port(pid_data.port))
+                .await
+                .is_ok()
         {
             return true;
         }
@@ -691,7 +708,9 @@ async fn is_server_owned() -> bool {
 }
 
 pub(crate) async fn opencode_server_status() -> Value {
-    let base_url = tracked_server_base_url().await.unwrap_or_else(rest_base_url);
+    let base_url = tracked_server_base_url()
+        .await
+        .unwrap_or_else(rest_base_url);
     let managed = is_server_owned().await;
     match health_check(&base_url).await {
         Ok(health) => json!({

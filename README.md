@@ -10,11 +10,23 @@ OpenCode Monitor is an independent community project and is not affiliated with 
 
 **Active development** — core REST/SSE support is live for thread/session lifecycle, event translation, messaging, model discovery, approvals, and image attachments. Remaining work is parity polish and OpenCode-specific UX cleanup.
 
+## Install
+
+Download the latest packaged build from [GitHub Releases](https://github.com/jacobjmc/OpenCodeMonitor/releases).
+
+Current release targets:
+
+- macOS Apple Silicon
+- Windows x64
+- Linux x64 / arm64 (`AppImage` and `rpm`)
+
 ## Requirements
 
 ### 1) OpenCode CLI (required)
 
-This app expects a running OpenCode server (`opencode serve`). Install OpenCode first:
+OpenCode Monitor uses your local `opencode` CLI installation and manages its own local `opencode serve` process automatically. You do not need to start the server yourself.
+
+Install OpenCode first:
 
 ```bash
 # Recommended (macOS/Linux)
@@ -30,7 +42,7 @@ Then verify the CLI:
 opencode --version
 ```
 
-### 2) Local tooling for development
+### 2) Local tooling for development only
 
 - Node.js 20+
 - npm 10+
@@ -38,20 +50,22 @@ opencode --version
 
 ## First Run
 
-1. Start OpenCode server in a separate terminal:
+1. Install the `opencode` CLI and confirm `opencode --version` works in your terminal.
 
-```bash
-opencode serve --port 4040
-```
+2. Launch OpenCode Monitor.
 
-2. Start OpenCode Monitor:
+3. Open `Settings -> OpenCode` if you want to verify the managed server status. The app starts and monitors its own local OpenCode server, which defaults to `http://127.0.0.1:14096`.
+
+4. Add a workspace and start a thread.
+
+## Development
+
+To run from source:
 
 ```bash
 npm install
 npm run tauri:dev
 ```
-
-3. In Settings -> Server, ensure the backend URL points to your OpenCode server (default: `http://127.0.0.1:4040`).
 
 ## Architecture
 
