@@ -1,6 +1,6 @@
 [package]
 name = "opencode-monitor"
-version = "0.1.1"
+version = "0.1.2"
 description = "Desktop app for monitoring and interacting with OpenCode agents across multiple workspaces"
 authors = ["Jacob"]
 license = "MIT"
