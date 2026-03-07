@@ -42,7 +42,10 @@ export function RequestUserInputMessage({
     [requests, activeThreadId, activeWorkspaceId],
   );
   const activeRequest = activeRequests[0] ?? null;
-  const questions = activeRequest?.params.questions ?? [];
+  const questions = useMemo(
+    () => activeRequest?.params.questions ?? [],
+    [activeRequest],
+  );
   const totalRequests = activeRequests.length;
 
   const [selections, setSelections] = useState<SelectionState>({});

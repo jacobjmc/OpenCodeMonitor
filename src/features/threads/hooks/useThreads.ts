@@ -508,7 +508,7 @@ export function useThreads({
         void resumeThreadForWorkspace(targetId, threadId);
       }
     },
-    [activeWorkspaceId, resumeThreadForWorkspace, state.activeThreadIdByWorkspace],
+    [activeWorkspaceId, resumeThreadForWorkspace],
   );
 
   const removeThread = useCallback(

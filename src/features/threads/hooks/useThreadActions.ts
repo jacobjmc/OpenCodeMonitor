@@ -812,6 +812,7 @@ export function useThreadActions({
       dispatch,
       getCustomName,
       onDebug,
+      threadActivityRef,
       threadListCursorByWorkspace,
       threadsByWorkspace,
       threadSortKey,
