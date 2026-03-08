@@ -1129,9 +1129,16 @@ fn persist_data_image_to_temp_file(data_url: &str) -> Option<String> {
     if !metadata.starts_with("image/") {
         return None;
     }
+    let estimated_len = encoded.len().saturating_mul(3) / 4;
+    if estimated_len > URL_IMAGE_MAX_BYTES {
+        return None;
+    }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .ok()?;
+    if bytes.len() > URL_IMAGE_MAX_BYTES {
+        return None;
+    }
 
     let mut hasher = DefaultHasher::new();
     metadata.hash(&mut hasher);
