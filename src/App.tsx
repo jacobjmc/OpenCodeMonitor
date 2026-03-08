@@ -1466,6 +1466,7 @@ function MainApp() {
   useWorkspaceRestore({
     workspaces,
     hasLoaded,
+    enabled: !appSettingsLoading,
     connectWorkspace,
     listThreadsForWorkspace
   });

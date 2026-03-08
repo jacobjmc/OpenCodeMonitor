@@ -136,6 +136,46 @@ describe("useWorkspaceRestore", () => {
     expect(listThreadsForWorkspace).toHaveBeenCalledTimes(1);
     expect(listThreadsForWorkspace).toHaveBeenCalledWith(workspace);
   });
+
+  it("waits until restore is enabled before reconnecting workspaces", async () => {
+    const workspace = createWorkspace();
+    const connectWorkspace = vi
+      .fn<WorkspaceRestoreOptions["connectWorkspace"]>()
+      .mockResolvedValue(undefined);
+    const listThreadsForWorkspace = vi
+      .fn<WorkspaceRestoreOptions["listThreadsForWorkspace"]>()
+      .mockResolvedValue(undefined);
+
+    const { rerender } = renderHook(
+      ({ enabled }) =>
+        useWorkspaceRestore({
+          workspaces: [workspace],
+          hasLoaded: true,
+          enabled,
+          connectWorkspace,
+          listThreadsForWorkspace,
+        }),
+      {
+        initialProps: { enabled: false },
+      },
+    );
+
+    await act(async () => {
+      await flushMicrotasks();
+    });
+
+    expect(connectWorkspace).not.toHaveBeenCalled();
+    expect(listThreadsForWorkspace).not.toHaveBeenCalled();
+
+    rerender({ enabled: true });
+
+    await act(async () => {
+      await flushMicrotasks();
+    });
+
+    expect(connectWorkspace).toHaveBeenCalledTimes(1);
+    expect(listThreadsForWorkspace).toHaveBeenCalledTimes(1);
+  });
 });
 
 type WorkspaceRestoreOptions = {

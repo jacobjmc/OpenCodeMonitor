@@ -7,6 +7,7 @@ const MAX_RESTORE_RETRIES = 5;
 type WorkspaceRestoreOptions = {
   workspaces: WorkspaceInfo[];
   hasLoaded: boolean;
+  enabled?: boolean;
   connectWorkspace: (workspace: WorkspaceInfo) => Promise<void>;
   listThreadsForWorkspace: (
     workspace: WorkspaceInfo,
@@ -17,6 +18,7 @@ type WorkspaceRestoreOptions = {
 export function useWorkspaceRestore({
   workspaces,
   hasLoaded,
+  enabled = true,
   connectWorkspace,
   listThreadsForWorkspace,
 }: WorkspaceRestoreOptions) {
@@ -27,6 +29,7 @@ export function useWorkspaceRestore({
   const optionsRef = useRef({
     workspaces,
     hasLoaded,
+    enabled,
     connectWorkspace,
     listThreadsForWorkspace,
   });
@@ -35,6 +38,7 @@ export function useWorkspaceRestore({
     optionsRef.current = {
       workspaces,
       hasLoaded,
+      enabled,
       connectWorkspace,
       listThreadsForWorkspace,
     };
@@ -51,7 +55,7 @@ export function useWorkspaceRestore({
   );
 
   useEffect(() => {
-    if (!hasLoaded) {
+    if (!hasLoaded || !enabled) {
       return;
     }
 
@@ -83,10 +87,11 @@ export function useWorkspaceRestore({
       const {
         workspaces: latestWorkspaces,
         hasLoaded: latestHasLoaded,
+        enabled: latestEnabled,
         connectWorkspace: latestConnectWorkspace,
         listThreadsForWorkspace: latestListThreadsForWorkspace,
       } = optionsRef.current;
-      if (!latestHasLoaded) {
+      if (!latestHasLoaded || !latestEnabled) {
         return;
       }
       const workspace = latestWorkspaces.find((entry) => entry.id === workspaceId);
@@ -136,5 +141,5 @@ export function useWorkspaceRestore({
     workspaces.forEach((workspace) => {
       restoreWorkspace(workspace.id);
     });
-  }, [connectWorkspace, hasLoaded, listThreadsForWorkspace, workspaces]);
+  }, [connectWorkspace, enabled, hasLoaded, listThreadsForWorkspace, workspaces]);
 }
