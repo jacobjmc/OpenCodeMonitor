@@ -1,5 +1,6 @@
 import {
   memo,
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -7,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import ChevronDown from "lucide-react/dist/esm/icons/chevron-down";
 import ChevronUp from "lucide-react/dist/esm/icons/chevron-up";
 import type {
@@ -63,8 +65,14 @@ type MessagesProps = {
   onQuoteMessage?: (text: string) => void;
 };
 
+type MessageListRow = {
+  id: string;
+  node: ReactNode;
+};
+
 const SINGLE_FENCED_BLOCK_PATTERN =
   /^\s*(```|~~~)[^\r\n]*\r?\n([\s\S]*?)\r?\n\1\s*$/;
+const VIRTUALIZATION_ROW_THRESHOLD = 30;
 
 function getCopyableMessageText(text: string) {
   const fencedMatch = text.match(SINGLE_FENCED_BLOCK_PATTERN);
@@ -95,7 +103,6 @@ export const Messages = memo(function Messages({
   onOpenThreadLink,
   onQuoteMessage,
 }: MessagesProps) {
-  const bottomRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const autoScrollRef = useRef(true);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
@@ -144,7 +151,6 @@ export const Messages = memo(function Messages({
       container.scrollTop = container.scrollHeight;
       return;
     }
-    bottomRef.current?.scrollIntoView({ block: "end" });
   }, [isNearBottom]);
 
   useLayoutEffect(() => {
@@ -333,7 +339,6 @@ export const Messages = memo(function Messages({
       container.scrollTop = container.scrollHeight;
       return;
     }
-    bottomRef.current?.scrollIntoView({ block: "end" });
   }, [scrollKey, isThinking, isNearBottom, threadId]);
 
   const groupedItems = useMemo(() => buildToolGroups(visibleItems), [visibleItems]);
@@ -514,30 +519,25 @@ export const Messages = memo(function Messages({
     return null;
   };
 
-  return (
-    <div
-      className="messages messages-full"
-      ref={containerRef}
-      onScroll={updateAutoScroll}
-    >
-      {groupedItems.map((entry) => {
-        if (entry.kind === "toolGroup") {
-          const { group } = entry;
-          const isCollapsed = collapsedToolGroups.has(group.id);
-          const summaryParts = [
-            formatCount(group.toolCount, "tool call", "tool calls"),
-          ];
-          if (group.messageCount > 0) {
-            summaryParts.push(formatCount(group.messageCount, "message", "messages"));
-          }
-          const summaryText = summaryParts.join(", ");
-          const groupBodyId = `tool-group-${group.id}`;
-          const ChevronIcon = isCollapsed ? ChevronDown : ChevronUp;
-          return (
-            <div
-              key={`tool-group-${group.id}`}
-              className={`tool-group ${isCollapsed ? "tool-group-collapsed" : ""}`}
-            >
+  const rows = useMemo<MessageListRow[]>(() => {
+    const nextRows: MessageListRow[] = [];
+    groupedItems.forEach((entry) => {
+      if (entry.kind === "toolGroup") {
+        const { group } = entry;
+        const isCollapsed = collapsedToolGroups.has(group.id);
+        const summaryParts = [
+          formatCount(group.toolCount, "tool call", "tool calls"),
+        ];
+        if (group.messageCount > 0) {
+          summaryParts.push(formatCount(group.messageCount, "message", "messages"));
+        }
+        const summaryText = summaryParts.join(", ");
+        const groupBodyId = `tool-group-${group.id}`;
+        const ChevronIcon = isCollapsed ? ChevronDown : ChevronUp;
+        nextRows.push({
+          id: `tool-group-${group.id}`,
+          node: (
+            <div className={`tool-group ${isCollapsed ? "tool-group-collapsed" : ""}`}>
               <div className="tool-group-header">
                 <button
                   type="button"
@@ -559,33 +559,153 @@ export const Messages = memo(function Messages({
                 </div>
               )}
             </div>
-          );
-        }
-        return renderItem(entry.item);
-      })}
-      {planFollowupNode}
-      {userInputNode}
-      <WorkingIndicator
-        isThinking={isThinking}
-        processingStartedAt={processingStartedAt}
-        lastDurationMs={lastDurationMs}
-        hasItems={items.length > 0}
-        reasoningLabel={workingReasoningLabel}
-      />
-      {!items.length && !userInputNode && !isThinking && !isLoadingMessages && (
-        <div className="empty messages-empty">
-          {threadId ? "Send a prompt to the agent." : "Send a prompt to start a new agent."}
-        </div>
-      )}
-      {!items.length && !userInputNode && !isThinking && isLoadingMessages && (
-        <div className="empty messages-empty">
-          <div className="messages-loading-indicator" role="status" aria-live="polite">
-            <span className="working-spinner" aria-hidden />
-            <span className="messages-loading-label">Loading…</span>
+          ),
+        });
+        return;
+      }
+      nextRows.push({
+        id: entry.item.id,
+        node: renderItem(entry.item),
+      });
+    });
+
+    if (planFollowupNode) {
+      nextRows.push({
+        id: `plan-followup-${threadId ?? "none"}-${planFollowup.planItemId ?? "none"}`,
+        node: planFollowupNode,
+      });
+    }
+    if (userInputNode) {
+      nextRows.push({
+        id: `user-input-${activeUserInputRequestId ?? "none"}`,
+        node: userInputNode,
+      });
+    }
+
+    nextRows.push({
+      id: `working-${threadId ?? "none"}-${isThinking ? "thinking" : lastDurationMs ?? "idle"}`,
+      node: (
+        <WorkingIndicator
+          isThinking={isThinking}
+          processingStartedAt={processingStartedAt}
+          lastDurationMs={lastDurationMs}
+          hasItems={items.length > 0}
+          reasoningLabel={workingReasoningLabel}
+        />
+      ),
+    });
+
+    if (!items.length && !userInputNode && !isThinking && !isLoadingMessages) {
+      nextRows.push({
+        id: `empty-${threadId ?? "new"}`,
+        node: (
+          <div className="empty messages-empty">
+            {threadId ? "Send a prompt to the agent." : "Send a prompt to start a new agent."}
           </div>
+        ),
+      });
+    }
+
+    if (!items.length && !userInputNode && !isThinking && isLoadingMessages) {
+      nextRows.push({
+        id: `loading-${threadId ?? "new"}`,
+        node: (
+          <div className="empty messages-empty">
+            <div className="messages-loading-indicator" role="status" aria-live="polite">
+              <span className="working-spinner" aria-hidden />
+              <span className="messages-loading-label">Loading…</span>
+            </div>
+          </div>
+        ),
+      });
+    }
+
+    return nextRows;
+  }, [
+    activeUserInputRequestId,
+    collapsedToolGroups,
+    groupedItems,
+    isLoadingMessages,
+    isThinking,
+    items.length,
+    lastDurationMs,
+    planFollowup.planItemId,
+    planFollowupNode,
+    processingStartedAt,
+    renderItem,
+    threadId,
+    toggleToolGroup,
+    userInputNode,
+    workingReasoningLabel,
+  ]);
+  const shouldVirtualize = rows.length > VIRTUALIZATION_ROW_THRESHOLD;
+
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    enabled: shouldVirtualize,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => 180,
+    overscan: 6,
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
+
+  useEffect(() => {
+    if (!shouldVirtualize) {
+      return;
+    }
+    rowVirtualizer.measure();
+  }, [
+    activeUserInputRequestId,
+    collapsedToolGroups,
+    expandedItems,
+    isThinking,
+    lastDurationMs,
+    planFollowup.planItemId,
+    rowVirtualizer,
+    scrollKey,
+    shouldVirtualize,
+  ]);
+
+  return (
+    <div
+      className="messages messages-full"
+      ref={containerRef}
+      onScroll={updateAutoScroll}
+    >
+      {shouldVirtualize ? (
+        <div
+          style={{
+            height: rowVirtualizer.getTotalSize(),
+            position: "relative",
+            width: "100%",
+          }}
+        >
+          {virtualRows.map((virtualRow) => {
+            const row = rows[virtualRow.index];
+            if (!row) {
+              return null;
+            }
+            return (
+              <div
+                key={virtualRow.key}
+                data-index={virtualRow.index}
+                ref={rowVirtualizer.measureElement}
+                style={{
+                  left: 0,
+                  position: "absolute",
+                  top: 0,
+                  transform: `translateY(${virtualRow.start}px)`,
+                  width: "100%",
+                }}
+              >
+                {row.node}
+              </div>
+            );
+          })}
         </div>
+      ) : (
+        rows.map((row) => <div key={row.id}>{row.node}</div>)
       )}
-      <div ref={bottomRef} />
     </div>
   );
 });

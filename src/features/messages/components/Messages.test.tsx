@@ -410,6 +410,92 @@ describe("Messages", () => {
     expect(useFileLinkOpenerMock).toHaveBeenCalledTimes(1);
   });
 
+  it("virtualizes large message lists instead of rendering every row", async () => {
+    const items: ConversationItem[] = Array.from({ length: 60 }, (_, index) => ({
+      id: `msg-virtual-${index}`,
+      kind: "message",
+      role: "assistant",
+      text: `Virtualized message ${index}`,
+    }));
+    const offsetHeightDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetHeight",
+    );
+    const offsetWidthDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "offsetWidth",
+    );
+    const resizeObserverPrototype = window.ResizeObserver?.prototype;
+    const originalObserve = resizeObserverPrototype?.observe;
+    const originalUnobserve = resizeObserverPrototype?.unobserve;
+    const originalDisconnect = resizeObserverPrototype?.disconnect;
+
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get() {
+        const element = this as HTMLElement;
+        if (element.classList.contains("messages")) {
+          return 720;
+        }
+        return 180;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get() {
+        return 1024;
+      },
+    });
+    if (resizeObserverPrototype) {
+      resizeObserverPrototype.observe = () => undefined;
+      resizeObserverPrototype.unobserve = () => undefined;
+      resizeObserverPrototype.disconnect = () => undefined;
+    }
+
+    let unmount: (() => void) | null = null;
+    try {
+      const view = render(
+        <Messages
+          items={items}
+          threadId="thread-virtual"
+          workspaceId="ws-1"
+          isThinking={false}
+          openTargets={[]}
+          selectedOpenAppId=""
+        />,
+      );
+      unmount = view.unmount;
+      const { container } = view;
+
+      await waitFor(() => {
+        const renderedMessages = container.querySelectorAll(".message");
+        expect(renderedMessages.length).toBeGreaterThan(0);
+        expect(renderedMessages.length).toBeLessThan(items.length);
+      });
+
+      expect(screen.getByText("Virtualized message 0")).toBeTruthy();
+      expect(screen.queryByText("Virtualized message 20")).toBeNull();
+      expect(screen.queryByText("Virtualized message 59")).toBeNull();
+    } finally {
+      unmount?.();
+      if (offsetHeightDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetHeight", offsetHeightDescriptor);
+      } else {
+        delete (HTMLElement.prototype as { offsetHeight?: number }).offsetHeight;
+      }
+      if (offsetWidthDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "offsetWidth", offsetWidthDescriptor);
+      } else {
+        delete (HTMLElement.prototype as { offsetWidth?: number }).offsetWidth;
+      }
+      if (resizeObserverPrototype) {
+        resizeObserverPrototype.observe = originalObserve ?? (() => undefined);
+        resizeObserverPrototype.unobserve = originalUnobserve ?? (() => undefined);
+        resizeObserverPrototype.disconnect = originalDisconnect ?? (() => undefined);
+      }
+    }
+  });
+
   it("renders title-only reasoning rows and keeps the working indicator generic", () => {
     const items: ConversationItem[] = [
       {

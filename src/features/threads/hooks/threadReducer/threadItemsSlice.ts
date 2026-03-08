@@ -168,6 +168,27 @@ export function reduceThreadItems(state: ThreadState, action: ThreadAction): Thr
         threadsByWorkspace: nextThreadsByWorkspace,
       };
     }
+    case "evictThreadItems": {
+      if (action.threadIds.length === 0) {
+        return state;
+      }
+      let changed = false;
+      const nextItemsByThread = { ...state.itemsByThread };
+      action.threadIds.forEach((threadId) => {
+        if (!(threadId in nextItemsByThread)) {
+          return;
+        }
+        delete nextItemsByThread[threadId];
+        changed = true;
+      });
+      if (!changed) {
+        return state;
+      }
+      return {
+        ...state,
+        itemsByThread: nextItemsByThread,
+      };
+    }
     case "setThreadItems":
       return {
         ...state,

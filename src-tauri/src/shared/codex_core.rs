@@ -1,5 +1,8 @@
+use base64::Engine;
 use serde_json::{json, Value};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -576,7 +579,10 @@ pub(crate) async fn resume_thread_core<E: EventSink>(
                     }
                     "file" => {
                         if let Some(url) = part.get("url").and_then(|v| v.as_str()) {
-                            content_parts.push(json!({ "type": "image", "value": url }));
+                            content_parts.push(json!({
+                                "type": "image",
+                                "value": frontend_image_value(url)
+                            }));
                         }
                     }
                     _ => {}
@@ -1102,6 +1108,55 @@ pub(crate) async fn set_thread_name_core(
 const URL_IMAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const URL_IMAGE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
+fn extension_from_mime(mime: &str) -> &'static str {
+    match mime.trim().to_ascii_lowercase().as_str() {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        _ => "bin",
+    }
+}
+
+fn persist_data_image_to_temp_file(data_url: &str) -> Option<String> {
+    let trimmed = data_url.trim();
+    let (metadata, encoded) = trimmed
+        .strip_prefix("data:")?
+        .split_once(";base64,")?;
+    if !metadata.starts_with("image/") {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+
+    let mut hasher = DefaultHasher::new();
+    metadata.hash(&mut hasher);
+    bytes.hash(&mut hasher);
+    let digest = hasher.finish();
+
+    let cache_dir = std::env::temp_dir().join("opencode-monitor-image-cache");
+    std::fs::create_dir_all(&cache_dir).ok()?;
+
+    let extension = extension_from_mime(metadata);
+    let path = cache_dir.join(format!("{digest:016x}.{extension}"));
+    if !path.exists() {
+        std::fs::write(&path, &bytes).ok()?;
+    }
+    path.to_str().map(|value| value.to_string())
+}
+
+fn frontend_image_value(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("data:image/") {
+        return persist_data_image_to_temp_file(trimmed).unwrap_or_else(|| trimmed.to_string());
+    }
+    trimmed.to_string()
+}
+
 /// Build REST prompt parts from frontend input.
 ///
 /// REST uses `{ type: "file", mime, url: "data:...", filename }` for images.
@@ -1141,7 +1196,6 @@ async fn build_rest_prompt_parts(
                 // Local file path — read and base64-encode.
                 match std::fs::read(trimmed) {
                     Ok(bytes) => {
-                        use base64::Engine;
                         let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
                         let mime = mime_from_extension(trimmed);
                         let filename = std::path::Path::new(trimmed)
@@ -1629,7 +1683,10 @@ pub(crate) async fn send_user_message_core<E: EventSink>(
             if trimmed.is_empty() {
                 continue;
             }
-            content_parts.push(json!({ "type": "image", "value": trimmed }));
+            content_parts.push(json!({
+                "type": "image",
+                "value": frontend_image_value(trimmed)
+            }));
         }
         if !content_parts.is_empty() {
             let user_item_id = {
@@ -2348,6 +2405,18 @@ mod tests {
             let error = result.expect_err("localhost URL should be blocked");
             assert!(error.contains("Blocked image URL host"));
         });
+    }
+
+    #[test]
+    fn frontend_image_value_materializes_data_urls_to_temp_files() {
+        let data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=";
+
+        let path = frontend_image_value(data_url);
+        let repeated = frontend_image_value(data_url);
+
+        assert!(!path.starts_with("data:"));
+        assert_eq!(path, repeated);
+        assert!(PathBuf::from(&path).exists());
     }
 
     #[test]

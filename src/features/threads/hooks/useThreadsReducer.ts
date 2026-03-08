@@ -91,6 +91,7 @@ export type ThreadAction =
       hasCustomName?: boolean;
       isReplay?: boolean;
     }
+  | { type: "evictThreadItems"; threadIds: string[] }
   | { type: "setThreadItems"; threadId: string; items: ConversationItem[] }
   | {
       type: "appendReasoningSummary";

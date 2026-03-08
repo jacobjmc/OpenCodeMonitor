@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type {
   CustomPromptOption,
   DebugEntry,
@@ -26,6 +26,8 @@ import {
   saveCustomName,
   saveDetachedReviewLinks,
 } from "@threads/utils/threadStorage";
+
+const MAX_INACTIVE_THREAD_CACHES = 5;
 
 type UseThreadsOptions = {
   activeWorkspace: WorkspaceInfo | null;
@@ -79,6 +81,7 @@ export function useThreads({
   const { handleUserInputSubmit, handleUserInputDismiss } = useThreadUserInput({ dispatch });
   const {
     customNamesRef,
+    pinnedThreadsRef,
     threadActivityRef,
     pinnedThreadsVersion,
     getCustomName,
@@ -88,7 +91,6 @@ export function useThreads({
     isThreadPinned,
     getPinTimestamp,
   } = useThreadStorage();
-  void pinnedThreadsVersion;
 
   const activeWorkspaceId = activeWorkspace?.id ?? null;
   const { activeThreadId, activeItems } = useThreadSelectors({
@@ -127,6 +129,82 @@ export function useThreads({
     },
     [activeThreadId, dispatch],
   );
+
+  useEffect(() => {
+    const cachedThreadIds = Object.entries(state.itemsByThread)
+      .filter(([, items]) => items.length > 0)
+      .map(([threadId]) => threadId);
+    if (cachedThreadIds.length <= MAX_INACTIVE_THREAD_CACHES + 1) {
+      return;
+    }
+
+    const protectedThreadIds = new Set(
+      Object.values(state.activeThreadIdByWorkspace).filter(Boolean),
+    );
+    Object.entries(state.threadStatusById).forEach(([threadId, status]) => {
+      if (status?.isProcessing || status?.isReviewing) {
+        protectedThreadIds.add(threadId);
+      }
+    });
+
+    Object.entries(state.threadsByWorkspace).forEach(([workspaceId, threads]) => {
+      threads.forEach((thread) => {
+        if (pinnedThreadsRef.current[`${workspaceId}:${thread.id}`]) {
+          protectedThreadIds.add(thread.id);
+        }
+      });
+    });
+
+    const updatedAtByThread = new Map<string, number>();
+    Object.values(threadActivityRef.current).forEach((workspaceThreads) => {
+      Object.entries(workspaceThreads ?? {}).forEach(([threadId, timestamp]) => {
+        const previous = updatedAtByThread.get(threadId) ?? 0;
+        if (timestamp > previous) {
+          updatedAtByThread.set(threadId, timestamp);
+        }
+      });
+    });
+    Object.values(state.threadsByWorkspace).forEach((threads) => {
+      threads.forEach((thread) => {
+        const previous = updatedAtByThread.get(thread.id) ?? 0;
+        if (thread.updatedAt > previous) {
+          updatedAtByThread.set(thread.id, thread.updatedAt);
+        }
+      });
+    });
+
+    const evictionCandidates = cachedThreadIds
+      .filter((threadId) => !protectedThreadIds.has(threadId))
+      .map((threadId) => ({
+        threadId,
+        updatedAt: updatedAtByThread.get(threadId) ?? 0,
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const threadIdsToEvict = evictionCandidates
+      .slice(MAX_INACTIVE_THREAD_CACHES)
+      .map((entry) => entry.threadId);
+
+    if (threadIdsToEvict.length === 0) {
+      return;
+    }
+
+    threadIdsToEvict.forEach((threadId) => {
+      delete loadedThreadsRef.current[threadId];
+      delete replaceOnResumeRef.current[threadId];
+    });
+
+    startTransition(() => {
+      dispatch({ type: "evictThreadItems", threadIds: threadIdsToEvict });
+    });
+  }, [
+    pinnedThreadsRef,
+    pinnedThreadsVersion,
+    state.activeThreadIdByWorkspace,
+    state.itemsByThread,
+    state.threadStatusById,
+    state.threadsByWorkspace,
+    threadActivityRef,
+  ]);
 
   const safeMessageActivity = useCallback(() => {
     try {

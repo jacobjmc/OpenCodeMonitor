@@ -261,6 +261,92 @@ describe("useThreads UX integration", () => {
     });
   });
 
+  it("re-resumes a loaded thread after its cached items are evicted", async () => {
+    vi.mocked(resumeThread).mockImplementation(async (_workspaceId, threadId) => ({
+      result: {
+        thread: {
+          id: threadId,
+          preview: `Remote ${threadId}`,
+          updated_at: 9999,
+          turns: [],
+        },
+      },
+    }));
+
+    const { result } = renderHook(() =>
+      useThreads({
+        activeWorkspace: workspace,
+        onWorkspaceConnected: vi.fn(),
+      }),
+    );
+
+    act(() => {
+      result.current.setActiveThreadId("thread-1");
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(resumeThread)).toHaveBeenCalledWith("ws-1", "thread-1");
+    });
+
+    act(() => {
+      for (let index = 1; index <= 7; index += 1) {
+        handlers?.onAgentMessageCompleted?.({
+          workspaceId: "ws-1",
+          threadId: `thread-${index}`,
+          itemId: `assistant-${index}`,
+          text: `Message ${index}`,
+          isReplay: false,
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.threadsByWorkspace["ws-1"]?.length).toBe(7);
+    });
+
+    act(() => {
+      result.current.setActiveThreadId("thread-4");
+    });
+
+    await waitFor(() => {
+      const thread4Calls = vi
+        .mocked(resumeThread)
+        .mock.calls.filter(([, threadId]) => threadId === "thread-4");
+      expect(thread4Calls).toHaveLength(1);
+    });
+
+    act(() => {
+      result.current.setActiveThreadId("thread-1");
+    });
+
+    act(() => {
+      for (let index = 8; index <= 9; index += 1) {
+        handlers?.onAgentMessageCompleted?.({
+          workspaceId: "ws-1",
+          threadId: `thread-${index}`,
+          itemId: `assistant-${index}`,
+          text: `Message ${index}`,
+          isReplay: false,
+        });
+      }
+    });
+
+    await waitFor(() => {
+      expect(result.current.threadsByWorkspace["ws-1"]?.length).toBe(9);
+    });
+
+    act(() => {
+      result.current.setActiveThreadId("thread-4");
+    });
+
+    await waitFor(() => {
+      const thread4Calls = vi
+        .mocked(resumeThread)
+        .mock.calls.filter(([, threadId]) => threadId === "thread-4");
+      expect(thread4Calls).toHaveLength(2);
+    });
+  });
+
   it("clears empty plan updates to null", () => {
     const { result } = renderHook(() =>
       useThreads({
